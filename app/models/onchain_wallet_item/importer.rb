@@ -32,7 +32,12 @@ class OnchainWalletItem::Importer
 
   def initialize(onchain_wallet_item)
     @onchain_wallet_item = onchain_wallet_item
+    # Ids of accounts whose on-chain state actually changed this run, so the
+    # syncer can skip re-processing/re-materializing unchanged accounts.
+    @changed_account_ids = []
   end
+
+  attr_reader :changed_account_ids
 
   def import
     imported = 0
@@ -54,7 +59,12 @@ class OnchainWalletItem::Importer
       "imported_at" => Time.current.iso8601
     })
 
-    { success: true, wallets_imported: imported, accounts_imported: onchain_wallet_item.onchain_wallet_accounts.count }
+    {
+      success: true,
+      wallets_imported: imported,
+      accounts_imported: onchain_wallet_item.onchain_wallet_accounts.count,
+      changed_account_ids: changed_account_ids.uniq
+    }
   end
 
   def import_wallet!(chain:, address:)
@@ -221,28 +231,55 @@ class OnchainWalletItem::Importer
 
     def upsert_wallet_account(attrs)
       current_balance = estimate_current_balance(attrs[:symbol], attrs[:quantity])
+      signature = content_signature(attrs)
 
-      onchain_wallet_item.onchain_wallet_accounts
-        .find_or_initialize_by(
-          chain: attrs[:chain],
-          wallet_address: attrs[:wallet_address],
-          asset_kind: attrs[:asset_kind],
-          token_contract: attrs[:token_contract],
-          symbol: attrs[:symbol]
-        )
-        .tap do |account|
-          account.assign_attributes(
-            name: attrs[:name],
-            decimals: attrs[:decimals],
-            quantity: attrs[:quantity],
-            currency: onchain_wallet_item.family.currency,
-            current_balance: current_balance,
-            raw_payload: attrs[:raw_payload],
-            raw_transactions_payload: attrs[:raw_transactions_payload],
-            institution_metadata: institution_metadata(attrs)
-          )
-          account.save!
-        end
+      account = onchain_wallet_item.onchain_wallet_accounts.find_or_initialize_by(
+        chain: attrs[:chain],
+        wallet_address: attrs[:wallet_address],
+        asset_kind: attrs[:asset_kind],
+        token_contract: attrs[:token_contract],
+        symbol: attrs[:symbol]
+      )
+
+      # Idempotent sync: when the on-chain state (quantity + transaction set) is
+      # unchanged, only refresh the price-derived balance and skip re-writing the
+      # heavy on-chain fields — and crucially, don't mark the account changed, so
+      # the syncer won't re-process/re-materialize it (no value-graph churn).
+      if account.persisted? && account.content_hash == signature
+        account.update_column(:current_balance, current_balance) if account.current_balance != current_balance
+        return account
+      end
+
+      account.assign_attributes(
+        name: attrs[:name],
+        decimals: attrs[:decimals],
+        quantity: attrs[:quantity],
+        currency: onchain_wallet_item.family.currency,
+        current_balance: current_balance,
+        raw_payload: attrs[:raw_payload],
+        raw_transactions_payload: attrs[:raw_transactions_payload],
+        institution_metadata: institution_metadata(attrs),
+        content_hash: signature
+      )
+      account.save!
+      @changed_account_ids << account.id
+      account
+    end
+
+    # Signature of the on-chain state we care about for change detection:
+    # the token quantity plus the set of transaction ids. Price is intentionally
+    # excluded — value tracks price via the daily security-price job, not this
+    # 30-minute on-chain sync.
+    def content_signature(attrs)
+      tx_ids = transaction_ids_from(attrs[:raw_transactions_payload])
+      payload = [ attrs[:quantity].to_s, tx_ids.sort ].to_json
+      Digest::SHA256.hexdigest(payload)
+    end
+
+    def transaction_ids_from(raw_transactions_payload)
+      payload = raw_transactions_payload || {}
+      Array(payload["transactions"] || payload["normal_transactions"] || payload["token_transfers"])
+        .filter_map { |tx| tx["hash"] || tx["txid"] }
     end
 
     def ensure_sure_account!(wallet_account)

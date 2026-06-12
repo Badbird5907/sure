@@ -143,6 +143,29 @@ class OnchainWalletItem::ImporterTest < ActiveSupport::TestCase
     assert_equal 80.0, usdt.quantity.to_f
   end
 
+  test "re-importing unchanged on-chain state reports no changed accounts (idempotent)" do
+    address = "0xde0b295669a9fd93d5f28d9ec85e40f4cb697bae"
+    @item.onchain_wallet_accounts.create!(
+      chain: "ethereum", wallet_address: address, asset_kind: "native",
+      symbol: "ETH", name: "Ethereum", currency: "USD", quantity: 1, current_balance: 1000
+    )
+
+    provider = Provider::Blockscout.new(chain: "ethereum")
+    provider.stubs(:get_native_balance).returns("1000000000000000000")
+    provider.stubs(:get_normal_transactions).returns([])
+    provider.stubs(:get_erc20_transfers).returns([])
+    @item.stubs(:blockscout_provider).returns(provider)
+    OnchainWalletAccount::SecurityResolver.stubs(:resolve).returns(nil)
+
+    first = OnchainWalletItem::Importer.new(@item)
+    first.import_evm_wallet!(chain: "ethereum", address: address, selected_token_contracts: [])
+    assert_equal 1, first.changed_account_ids.size
+
+    second = OnchainWalletItem::Importer.new(@item)
+    second.import_evm_wallet!(chain: "ethereum", address: address, selected_token_contracts: [])
+    assert_empty second.changed_account_ids, "unchanged on-chain state should not be re-written"
+  end
+
   test "import creates wallet accounts for all linked wallets" do
     address = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kygt080"
     @item.onchain_wallet_accounts.create!(
