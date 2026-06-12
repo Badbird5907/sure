@@ -15,7 +15,11 @@ class OnchainWalletAccount::SecurityResolver
     binance = Setting.enabled_securities_providers.include?(BINANCE_PRICE_PROVIDER)
     mic = binance ? Provider::BinancePublic::BINANCE_MIC : EXCHANGE_MIC
 
-    security = Security.find_or_initialize_by(ticker: ticker, exchange_operating_mic: mic)
+    # Reuse an existing security for this ticker regardless of its MIC, so the
+    # same asset isn't split into two Security records (which would break
+    # historical-holding/trade continuity) when the active provider changes.
+    security = Security.find_by(ticker: ticker) ||
+      Security.find_or_initialize_by(ticker: ticker, exchange_operating_mic: mic)
     security.name = name.presence || symbol.to_s.upcase if security.name.blank?
 
     if binance
