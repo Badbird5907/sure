@@ -109,7 +109,7 @@ class OnchainWalletItemsController < ApplicationController
     chain = params[:chain].to_s.downcase
     old_address = normalized_wallet_address(chain, params[:old_wallet_address])
     new_address = params[:wallet_address].to_s.strip
-    new_address = new_address.downcase if chain == "ethereum"
+    new_address = new_address.downcase if OnchainWalletAccount.evm_chain?(chain)
 
     return render_edit_error(chain, old_address, new_address, "Wallet address is required.") if new_address.blank?
     return render_edit_error(chain, old_address, new_address, "New address is the same as the current address.") if new_address == old_address
@@ -317,7 +317,7 @@ class OnchainWalletItemsController < ApplicationController
     end
 
     def normalized_wallet_address(chain, address)
-      return address.to_s.strip.downcase if chain.to_s.downcase == "ethereum"
+      return address.to_s.strip.downcase if OnchainWalletAccount.evm_chain?(chain)
 
       address.to_s.strip
     end
