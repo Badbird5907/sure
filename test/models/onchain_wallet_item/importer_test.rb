@@ -15,7 +15,7 @@ class OnchainWalletItem::ImporterTest < ActiveSupport::TestCase
       "mempool_stats" => { "funded_txo_sum" => 0, "spent_txo_sum" => 0 }
     }
     confirmed_txs = [
-      { "txid" => "abc123", "vout" => [{ "scriptpubkey_address" => address, "value" => 200_000_000 }], "vin" => [] }
+      { "txid" => "abc123", "vout" => [ { "scriptpubkey_address" => address, "value" => 200_000_000 } ], "vin" => [] }
     ]
 
     provider = Provider::MempoolSpace.new
@@ -64,16 +64,16 @@ class OnchainWalletItem::ImporterTest < ActiveSupport::TestCase
     end
   end
 
-  test "import_ethereum_wallet! creates native ETH account" do
+  test "import_ethereum_wallet! creates native ETH account (keyless via Blockscout)" do
     address = "0xde0b295669a9fd93d5f28d9ec85e40f4cb697bae"
 
-    provider = Provider::Etherscan.new(api_key: "test_key")
+    provider = Provider::Blockscout.new(chain: "ethereum")
     provider.expects(:get_native_balance).with(address).returns("2000000000000000000")
-    provider.expects(:get_normal_transactions).with(address).returns([{ "hash" => "0xabc", "from" => address, "to" => "0x123", "value" => "1000000000000000000" }])
+    provider.expects(:get_normal_transactions).with(address).returns([ { "hash" => "0xabc", "from" => address, "to" => "0x123", "value" => "1000000000000000000" } ])
     provider.expects(:get_erc20_transfers).with(address).returns([])
-    @item.expects(:etherscan_provider).returns(provider)
+    @item.stubs(:blockscout_provider).with("ethereum").returns(provider)
 
-    OnchainWalletAccount::SecurityResolver.expects(:resolve).returns(nil)
+    OnchainWalletAccount::SecurityResolver.stubs(:resolve).returns(nil)
 
     importer = OnchainWalletItem::Importer.new(@item)
     importer.import_ethereum_wallet!(address: address, selected_token_contracts: [])
@@ -84,13 +84,39 @@ class OnchainWalletItem::ImporterTest < ActiveSupport::TestCase
     assert_equal 2.0, wallet_account.quantity.to_f
   end
 
-  test "import_ethereum_wallet! raises without etherscan provider" do
-    @item.expects(:etherscan_provider).returns(nil)
+  test "import_evm_wallet! works for non-Ethereum EVM chains (e.g. Polygon)" do
+    address = "0xde0b295669a9fd93d5f28d9ec85e40f4cb697bae"
+
+    provider = Provider::Blockscout.new(chain: "polygon")
+    provider.expects(:get_native_balance).with(address).returns("5000000000000000000")
+    provider.expects(:get_normal_transactions).with(address).returns([])
+    provider.expects(:get_erc20_transfers).with(address).returns([])
+    @item.expects(:blockscout_provider).with("polygon").returns(provider)
+
+    OnchainWalletAccount::SecurityResolver.stubs(:resolve).returns(nil)
+
+    importer = OnchainWalletItem::Importer.new(@item)
+    importer.import_evm_wallet!(chain: "polygon", address: address, selected_token_contracts: [])
+
+    native = @item.onchain_wallet_accounts.find_by(chain: "polygon", asset_kind: "native")
+    assert native.present?
+    assert_equal "POL", native.symbol
+    assert_equal 5.0, native.quantity.to_f
+  end
+
+  test "import_evm_wallet! raises for an address with no balance or activity" do
+    address = "0xde0b295669a9fd93d5f28d9ec85e40f4cb697bae"
+
+    provider = Provider::Blockscout.new(chain: "ethereum")
+    provider.stubs(:get_native_balance).returns("0")
+    provider.stubs(:get_normal_transactions).returns([])
+    provider.stubs(:get_erc20_transfers).returns([])
+    @item.stubs(:blockscout_provider).returns(provider)
 
     importer = OnchainWalletItem::Importer.new(@item)
 
-    assert_raises(Provider::Etherscan::AuthenticationError) do
-      importer.import_ethereum_wallet!(address: "0xde0b295669a9fd93d5f28d9ec85e40f4cb697bae", selected_token_contracts: [])
+    assert_raises(Provider::Blockscout::InvalidAddressError) do
+      importer.import_ethereum_wallet!(address: address, selected_token_contracts: [])
     end
   end
 
@@ -114,7 +140,7 @@ class OnchainWalletItem::ImporterTest < ActiveSupport::TestCase
 
     provider = Provider::MempoolSpace.new
     provider.expects(:get_address).with(address).returns(address_payload)
-    provider.expects(:get_address_txs).with(address).returns([{ "txid" => "tx1", "vout" => [{ "scriptpubkey_address" => address, "value" => 100_000_000 }], "vin" => [] }])
+    provider.expects(:get_address_txs).with(address).returns([ { "txid" => "tx1", "vout" => [ { "scriptpubkey_address" => address, "value" => 100_000_000 } ], "vin" => [] } ])
     provider.expects(:get_mempool_txs).with(address).returns([])
     @item.expects(:mempool_space_provider).returns(provider)
 
