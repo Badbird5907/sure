@@ -5,8 +5,8 @@ class OnchainWalletAccount < ApplicationRecord
 
   # EVM-family chains share the same address format and (keyless) Blockscout reader.
   EVM_CHAINS = %w[ethereum polygon arbitrum optimism base gnosis].freeze
-  CHAINS = (%w[bitcoin] + EVM_CHAINS).freeze
-  ASSET_KINDS = %w[native erc20].freeze
+  CHAINS = (%w[bitcoin] + EVM_CHAINS + %w[solana]).freeze
+  ASSET_KINDS = %w[native erc20 spl].freeze
 
   def self.evm_chain?(chain)
     EVM_CHAINS.include?(chain.to_s.downcase)
@@ -25,7 +25,7 @@ class OnchainWalletAccount < ApplicationRecord
   validates :chain, inclusion: { in: CHAINS }
   validates :asset_kind, inclusion: { in: ASSET_KINDS }
   validates :wallet_address, :symbol, :name, :currency, presence: true
-  validates :token_contract, presence: true, if: -> { asset_kind == "erc20" }
+  validates :token_contract, presence: true, unless: -> { asset_kind == "native" }
   validates :token_contract, absence: true, if: -> { asset_kind == "native" }
   validates :symbol, uniqueness: {
     scope: [ :onchain_wallet_item_id, :chain, :wallet_address, :asset_kind, :token_contract ],

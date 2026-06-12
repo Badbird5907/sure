@@ -18,4 +18,9 @@ module OnchainWalletItem::Provided
   def blockscout_provider(chain)
     Provider::Blockscout.new(chain: chain)
   end
+
+  # Keyless Solana provider (public RPC).
+  def solana_provider
+    Provider::SolanaRpc.new
+  end
 end

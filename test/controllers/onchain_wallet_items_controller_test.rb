@@ -71,7 +71,7 @@ class OnchainWalletItemsControllerTest < ActionDispatch::IntegrationTest
 
   test "unsupported chain from modal re-renders modal error" do
     post link_wallet_onchain_wallet_items_path,
-         params: { source: "account_modal", chain: "solana", wallet_address: "wallet" },
+         params: { source: "account_modal", chain: "dogecoin", wallet_address: "wallet" },
          as: :turbo_stream,
          headers: { "Turbo-Frame" => "modal" }
 
@@ -171,7 +171,7 @@ class OnchainWalletItemsControllerTest < ActionDispatch::IntegrationTest
 
   test "settings panel requests still replace onchain provider panel" do
     post link_wallet_onchain_wallet_items_path,
-         params: { chain: "solana", wallet_address: "wallet" },
+         params: { chain: "dogecoin", wallet_address: "wallet" },
          as: :turbo_stream,
          headers: { "Turbo-Frame" => "onchain_wallet-connect-form" }
 

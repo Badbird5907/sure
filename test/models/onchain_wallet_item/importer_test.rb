@@ -40,7 +40,7 @@ class OnchainWalletItem::ImporterTest < ActiveSupport::TestCase
     importer = OnchainWalletItem::Importer.new(@item)
 
     assert_raises(ArgumentError) do
-      importer.import_wallet!(chain: "solana", address: "abc")
+      importer.import_wallet!(chain: "dogecoin", address: "abc")
     end
   end
 
@@ -118,6 +118,29 @@ class OnchainWalletItem::ImporterTest < ActiveSupport::TestCase
     assert_raises(Provider::Blockscout::InvalidAddressError) do
       importer.import_ethereum_wallet!(address: address, selected_token_contracts: [])
     end
+  end
+
+  test "import_wallet! with solana creates SOL + SPL token accounts" do
+    address = "EnQtaNYKgnbSaZ1ekZYXVbYnau2ZCNda3NzbbnWCna7B"
+
+    provider = Provider::SolanaRpc.new
+    provider.stubs(:get_native_balance).with(address).returns("1500000000")
+    provider.stubs(:get_token_balances).with(address).returns([
+      { mint: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", symbol: "USDT", name: "Tether USD", decimals: 6, raw_amount: "80000000", ui_amount: BigDecimal("80") }
+    ])
+    provider.stubs(:get_transactions).with(address).returns([])
+    @item.stubs(:solana_provider).returns(provider)
+    OnchainWalletAccount::SecurityResolver.stubs(:resolve).returns(nil)
+
+    OnchainWalletItem::Importer.new(@item).import_wallet!(chain: "solana", address: address)
+
+    sol = @item.onchain_wallet_accounts.find_by(chain: "solana", asset_kind: "native")
+    assert_equal "SOL", sol.symbol
+    assert_equal 1.5, sol.quantity.to_f
+
+    usdt = @item.onchain_wallet_accounts.find_by(chain: "solana", asset_kind: "spl")
+    assert_equal "USDT", usdt.symbol
+    assert_equal 80.0, usdt.quantity.to_f
   end
 
   test "import creates wallet accounts for all linked wallets" do

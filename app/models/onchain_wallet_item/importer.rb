@@ -3,6 +3,7 @@
 class OnchainWalletItem::Importer
   SATS_PER_BTC = 100_000_000.to_d
   WEI_PER_ETH = 1_000_000_000_000_000_000.to_d
+  LAMPORTS_PER_SOL = 1_000_000_000.to_d
 
   # Native coin metadata per EVM chain. All EVM natives use 18 decimals, so the
   # WEI_PER_ETH divisor applies across chains. Pricing flows through Sure's
@@ -42,6 +43,8 @@ class OnchainWalletItem::Importer
         snapshots[address] = import_bitcoin_wallet(address)
       elsif EVM_CHAINS.include?(chain)
         snapshots[address] = import_evm_wallet(chain, address)
+      elsif chain == "solana"
+        snapshots[address] = import_solana_wallet(address)
       end
       imported += 1
     end
@@ -60,6 +63,8 @@ class OnchainWalletItem::Importer
       import_bitcoin_wallet(address)
     elsif EVM_CHAINS.include?(chain)
       import_evm_wallet(chain, address)
+    elsif chain == "solana"
+      import_solana_wallet(address)
     else
       raise ArgumentError, "Unsupported chain"
     end
@@ -298,6 +303,60 @@ class OnchainWalletItem::Importer
           transfers: data[:transfers]
         }
       end
+    end
+
+    # Imports native SOL + SPL token balances (and best-effort tx history) from
+    # a keyless Solana RPC. Unlike EVM, balances are read directly.
+    def import_solana_wallet(address)
+      provider = onchain_wallet_item.solana_provider
+      lamports = provider.get_native_balance(address).to_d
+      sol_quantity = lamports / LAMPORTS_PER_SOL
+      token_balances = provider.get_token_balances(address)
+      transactions = provider.get_transactions(address)
+
+      if sol_quantity.zero? && token_balances.none? { |t| t[:ui_amount].positive? } && transactions.blank?
+        raise Provider::SolanaRpc::InvalidAddressError, "No Solana balance or transactions found for this address."
+      end
+
+      native_txs = transactions.select { |tx| tx["symbol"] == "SOL" }
+      sol_account = upsert_wallet_account(
+        chain: "solana",
+        wallet_address: address,
+        asset_kind: "native",
+        token_contract: nil,
+        symbol: "SOL",
+        name: "Solana",
+        decimals: 9,
+        quantity: sol_quantity,
+        raw_payload: { "lamports" => lamports.to_s },
+        raw_transactions_payload: { "transactions" => native_txs, "fetched_at" => Time.current.iso8601 }
+      )
+      ensure_sure_account!(sol_account)
+
+      token_balances.each do |token|
+        next unless token[:ui_amount].positive?
+
+        mint_txs = transactions.select { |tx| tx["mint"] == token[:mint] }
+        token_account = upsert_wallet_account(
+          chain: "solana",
+          wallet_address: address,
+          asset_kind: "spl",
+          token_contract: token[:mint],
+          symbol: canonical_symbol(token[:symbol]),
+          name: token[:name],
+          decimals: token[:decimals],
+          quantity: token[:ui_amount],
+          raw_payload: { "mint" => token[:mint] },
+          raw_transactions_payload: { "transactions" => mint_txs, "fetched_at" => Time.current.iso8601 }
+        )
+        ensure_sure_account!(token_account)
+      end
+
+      {
+        "sol_quantity" => sol_quantity.to_s,
+        "tokens_imported_count" => token_balances.count { |t| t[:ui_amount].positive? },
+        "transactions_count" => transactions.size
+      }
     end
 
     def existing_evm_token_contracts(chain, address)

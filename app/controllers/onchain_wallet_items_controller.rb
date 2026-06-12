@@ -80,7 +80,7 @@ class OnchainWalletItemsController < ApplicationController
     item.process_accounts
 
     render_success_response("Wallet linked.")
-  rescue Provider::MempoolSpace::Error, Provider::Etherscan::Error, Provider::Blockscout::Error, ArgumentError => e
+  rescue Provider::MempoolSpace::Error, Provider::Etherscan::Error, Provider::Blockscout::Error, Provider::SolanaRpc::Error, ArgumentError => e
     render_error_response(e.message)
   rescue StandardError => e
     Rails.logger.error("On-chain wallet link failed: #{e.class} - #{e.message}")
@@ -213,6 +213,8 @@ class OnchainWalletItemsController < ApplicationController
         raise Provider::MempoolSpace::InvalidAddressError, "Invalid Bitcoin address" unless item.mempool_space_provider.valid_address?(address)
       elsif OnchainWalletAccount.evm_chain?(chain)
         raise Provider::Blockscout::InvalidAddressError, "Invalid EVM wallet address" unless item.blockscout_provider(chain).valid_address?(address)
+      elsif chain == "solana"
+        raise Provider::SolanaRpc::InvalidAddressError, "Invalid Solana address" unless item.solana_provider.valid_address?(address)
       end
     end
 
