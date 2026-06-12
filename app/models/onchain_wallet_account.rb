@@ -12,6 +12,20 @@ class OnchainWalletAccount < ApplicationRecord
     EVM_CHAINS.include?(chain.to_s.downcase)
   end
 
+  # Detects the address family from its format. EVM addresses are shared across
+  # all EVM chains, so they return :evm (the caller picks the specific chain).
+  # @return [Symbol, nil] :bitcoin | :evm | :solana | nil (unrecognized)
+  def self.detect_chain_type(address)
+    a = address.to_s.strip
+    return nil if a.blank?
+    return :bitcoin if a.match?(/\A(bc1|tb1)[023456789acdefghjklmnpqrstuvwxyz]{6,87}\z/i)
+    return :evm     if a.match?(/\A0x[0-9a-fA-F]{40}\z/)
+    return :bitcoin if a.match?(/\A[13][a-km-zA-HJ-NP-Z1-9]{24,33}\z/)
+    return :solana  if a.match?(/\A[1-9A-HJ-NP-Za-km-z]{32,44}\z/)
+
+    nil
+  end
+
   if encryption_ready?
     encrypts :raw_payload
     encrypts :raw_transactions_payload

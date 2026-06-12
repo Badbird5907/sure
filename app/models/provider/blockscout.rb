@@ -57,6 +57,16 @@ class Provider::Blockscout
     address.to_s.match?(ADDRESS_PATTERN)
   end
 
+  # Whether this address has any balance or token activity on this chain.
+  # Used by auto-detect to find which EVM chain(s) a 0x address is active on.
+  def has_activity?(address)
+    return false unless valid_address?(address)
+
+    get_native_balance(address).to_d.positive? || get_erc20_transfers(address).any?
+  rescue Error
+    false
+  end
+
   # @return [String] native coin balance in wei (matches Etherscan's "balance")
   def get_native_balance(address)
     validate_address!(address)

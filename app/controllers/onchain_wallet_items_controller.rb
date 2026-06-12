@@ -50,8 +50,16 @@ class OnchainWalletItemsController < ApplicationController
     chain = params[:chain].to_s
     address = params[:wallet_address].to_s.strip
 
-    return render_error_response("Choose a supported blockchain.") unless chain.in?(OnchainWalletAccount::CHAINS)
     return render_error_response("Wallet address is required.") if address.blank?
+
+    # "auto" (or blank) → detect the chain from the address format; for EVM
+    # addresses, pick the first supported chain the address is active on.
+    if chain.blank? || chain == "auto"
+      chain = resolve_auto_chain(address)
+      return render_error_response("Could not detect the blockchain from this address.") if chain.blank?
+    end
+
+    return render_error_response("Choose a supported blockchain.") unless chain.in?(OnchainWalletAccount::CHAINS)
 
     # EVM chains are read keyless via Blockscout, so no API key gate is needed.
     item = Current.family.onchain_wallet_items.active.first
@@ -206,6 +214,15 @@ class OnchainWalletItemsController < ApplicationController
 
     def onchain_wallet_item_params
       params.require(:onchain_wallet_item).permit(:name, :etherscan_api_key, :sync_start_date)
+    end
+
+    def resolve_auto_chain(address)
+      case OnchainWalletAccount.detect_chain_type(address)
+      when :bitcoin then "bitcoin"
+      when :solana  then "solana"
+      when :evm
+        OnchainWalletAccount::EVM_CHAINS.find { |c| Provider::Blockscout.new(chain: c).has_activity?(address) } || "ethereum"
+      end
     end
 
     def validate_wallet_address!(item, chain, address)
