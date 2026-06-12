@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.2].define(version: 2026_06_12_000000) do
+ActiveRecord::Schema[7.2].define(version: 2026_06_12_010000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pgcrypto"
   enable_extension "plpgsql"
@@ -1455,6 +1455,7 @@ ActiveRecord::Schema[7.2].define(version: 2026_06_12_000000) do
     t.string "content_hash"
     t.index ["chain"], name: "index_onchain_wallet_accounts_on_chain"
     t.index ["onchain_wallet_item_id", "chain", "wallet_address", "asset_kind", "symbol"], name: "index_onchain_wallet_accounts_unique_native", unique: true, where: "((asset_kind)::text = 'native'::text)"
+    t.index ["onchain_wallet_item_id", "chain", "wallet_address", "asset_kind", "token_contract", "symbol"], name: "index_onchain_wallet_accounts_unique_spl", unique: true, where: "((asset_kind)::text = 'spl'::text)"
     t.index ["onchain_wallet_item_id", "chain", "wallet_address", "asset_kind", "token_contract", "symbol"], name: "index_onchain_wallet_accounts_unique_token", unique: true, where: "((asset_kind)::text = 'erc20'::text)"
     t.index ["onchain_wallet_item_id"], name: "index_onchain_wallet_accounts_on_onchain_wallet_item_id"
   end
