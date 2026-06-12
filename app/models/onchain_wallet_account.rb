@@ -3,8 +3,14 @@
 class OnchainWalletAccount < ApplicationRecord
   include Encryptable
 
-  CHAINS = %w[bitcoin ethereum].freeze
+  # EVM-family chains share the same address format and (keyless) Blockscout reader.
+  EVM_CHAINS = %w[ethereum polygon arbitrum optimism base gnosis].freeze
+  CHAINS = (%w[bitcoin] + EVM_CHAINS).freeze
   ASSET_KINDS = %w[native erc20].freeze
+
+  def self.evm_chain?(chain)
+    EVM_CHAINS.include?(chain.to_s.downcase)
+  end
 
   if encryption_ready?
     encrypts :raw_payload
@@ -53,7 +59,7 @@ class OnchainWalletAccount < ApplicationRecord
       self.chain = chain.to_s.downcase
       self.asset_kind = asset_kind.to_s.downcase.presence || "native"
       self.wallet_address = wallet_address.to_s.strip
-      self.wallet_address = wallet_address.downcase if chain == "ethereum"
+      self.wallet_address = wallet_address.downcase if EVM_CHAINS.include?(chain)
       self.token_contract = token_contract.to_s.strip.downcase.presence
       self.symbol = symbol.to_s.strip.upcase
       self.name = name.to_s.strip.presence || symbol

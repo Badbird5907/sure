@@ -12,4 +12,10 @@ module OnchainWalletItem::Provided
 
     Provider::Etherscan.new(api_key: etherscan_api_key)
   end
+
+  # Keyless EVM provider used for Ethereum and all other supported EVM chains.
+  # @param chain [String] e.g. "ethereum", "polygon", "arbitrum"
+  def blockscout_provider(chain)
+    Provider::Blockscout.new(chain: chain)
+  end
 end

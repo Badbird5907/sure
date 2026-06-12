@@ -4,6 +4,29 @@ class OnchainWalletItem::Importer
   SATS_PER_BTC = 100_000_000.to_d
   WEI_PER_ETH = 1_000_000_000_000_000_000.to_d
 
+  # Native coin metadata per EVM chain. All EVM natives use 18 decimals, so the
+  # WEI_PER_ETH divisor applies across chains. Pricing flows through Sure's
+  # securities provider (e.g. Binance Public) via the symbol, same as ETH.
+  EVM_NATIVE = {
+    "ethereum" => { symbol: "ETH",  name: "Ethereum" },
+    "polygon"  => { symbol: "POL",  name: "Polygon" },
+    "arbitrum" => { symbol: "ETH",  name: "Ethereum (Arbitrum)" },
+    "optimism" => { symbol: "ETH",  name: "Ethereum (Optimism)" },
+    "base"     => { symbol: "ETH",  name: "Ethereum (Base)" },
+    "gnosis"   => { symbol: "XDAI", name: "xDai" }
+  }.freeze
+  EVM_CHAINS = EVM_NATIVE.keys.freeze
+
+  # Bridged / wrapped stablecoin symbols normalized to their canonical asset so
+  # Sure's price provider recognizes them (e.g. USDT0, a LayerZero-bridged USDT,
+  # prices the same as USDT).
+  STABLECOIN_ALIASES = {
+    "USDT0"  => "USDT",
+    "USDT.E" => "USDT",
+    "USDC.E" => "USDC",
+    "USDBC"  => "USDC"
+  }.freeze
+
   attr_reader :onchain_wallet_item
 
   def initialize(onchain_wallet_item)
@@ -17,8 +40,8 @@ class OnchainWalletItem::Importer
     wallet_keys.each do |chain, address|
       if chain == "bitcoin"
         snapshots[address] = import_bitcoin_wallet(address)
-      elsif chain == "ethereum"
-        snapshots[address] = import_ethereum_wallet(address)
+      elsif EVM_CHAINS.include?(chain)
+        snapshots[address] = import_evm_wallet(chain, address)
       end
       imported += 1
     end
@@ -32,22 +55,32 @@ class OnchainWalletItem::Importer
   end
 
   def import_wallet!(chain:, address:)
-    case chain.to_s
-    when "bitcoin"
+    chain = chain.to_s
+    if chain == "bitcoin"
       import_bitcoin_wallet(address)
-    when "ethereum"
-      import_ethereum_wallet(address)
+    elsif EVM_CHAINS.include?(chain)
+      import_evm_wallet(chain, address)
     else
       raise ArgumentError, "Unsupported chain"
     end
   end
 
+  # Preview tokens before import (EVM chains only). Defaults to Ethereum for
+  # backwards compatibility with existing callers.
+  def preview_evm_wallet(chain, address)
+    evm_wallet_snapshot(chain, address)
+  end
+
   def preview_ethereum_wallet(address)
-    ethereum_wallet_snapshot(address)
+    preview_evm_wallet("ethereum", address)
+  end
+
+  def import_evm_wallet!(chain:, address:, selected_token_contracts:)
+    import_evm_wallet(chain, address, selected_token_contracts: selected_token_contracts)
   end
 
   def import_ethereum_wallet!(address:, selected_token_contracts:)
-    import_ethereum_wallet(address, selected_token_contracts: selected_token_contracts)
+    import_evm_wallet!(chain: "ethereum", address: address, selected_token_contracts: selected_token_contracts)
   end
 
   private
@@ -95,42 +128,44 @@ class OnchainWalletItem::Importer
       { "address" => address_payload, "transactions_count" => confirmed_txs.size, "mempool_transactions_count" => mempool_txs.size }
     end
 
-    def import_ethereum_wallet(address, selected_token_contracts: existing_ethereum_token_contracts(address))
-      snapshot = ethereum_wallet_snapshot(address)
+    def import_evm_wallet(chain, address, selected_token_contracts: nil)
+      selected_token_contracts ||= existing_evm_token_contracts(chain, address)
+      native = EVM_NATIVE.fetch(chain)
+      snapshot = evm_wallet_snapshot(chain, address)
       balance_wei = snapshot[:balance_wei]
       normal_transactions = snapshot[:normal_transactions]
       token_transfers = snapshot[:token_transfers]
       token_holdings = snapshot[:token_holdings]
 
       if balance_wei.zero? && normal_transactions.blank? && token_holdings.none? { |holding| holding[:quantity].positive? }
-        raise Provider::Etherscan::InvalidAddressError, "No Ethereum balance, token holdings, or transactions found for this address."
+        raise Provider::Blockscout::InvalidAddressError, "No #{native[:name]} balance, token holdings, or transactions found for this address."
       end
 
       selected_contracts = Array(selected_token_contracts).map { |contract| contract.to_s.downcase }
 
-      eth_quantity = balance_wei / WEI_PER_ETH
-      eth_account = upsert_wallet_account(
-        chain: "ethereum",
+      native_quantity = balance_wei / WEI_PER_ETH
+      native_account = upsert_wallet_account(
+        chain: chain,
         wallet_address: address,
         asset_kind: "native",
         token_contract: nil,
-        symbol: "ETH",
-        name: "Ethereum",
+        symbol: native[:symbol],
+        name: native[:name],
         decimals: 18,
-        quantity: eth_quantity,
+        quantity: native_quantity,
         raw_payload: { "balance_wei" => balance_wei.to_s },
         raw_transactions_payload: {
           "normal_transactions" => normal_transactions.map { |tx| tx.merge("onchain_amount" => ethereum_native_amount(tx, address).to_s) },
           "fetched_at" => Time.current.iso8601
         }
       )
-      ensure_sure_account!(eth_account)
+      ensure_sure_account!(native_account)
 
       token_holdings.each do |holding|
         next unless selected_contracts.include?(holding[:contract])
 
         token_account = upsert_wallet_account(
-          chain: "ethereum",
+          chain: chain,
           wallet_address: address,
           asset_kind: "erc20",
           token_contract: holding[:contract],
@@ -154,9 +189,11 @@ class OnchainWalletItem::Importer
       }
     end
 
-    def ethereum_wallet_snapshot(address)
-      provider = onchain_wallet_item.etherscan_provider
-      raise Provider::Etherscan::AuthenticationError, "Etherscan API key is required for Ethereum wallets" unless provider
+    # Reads balances + transactions from a keyless Blockscout instance for the
+    # given EVM chain.
+    def evm_wallet_snapshot(chain, address)
+      native = EVM_NATIVE.fetch(chain)
+      provider = onchain_wallet_item.blockscout_provider(chain)
 
       balance_wei = provider.get_native_balance(address).to_d
       normal_transactions = provider.get_normal_transactions(address)
@@ -164,13 +201,13 @@ class OnchainWalletItem::Importer
       token_holdings = token_holdings_from_transfers(token_transfers, address)
 
       if balance_wei.zero? && normal_transactions.blank? && token_holdings.none? { |holding| holding[:quantity].positive? }
-        raise Provider::Etherscan::InvalidAddressError, "No Ethereum balance, token holdings, or transactions found for this address."
+        raise Provider::Blockscout::InvalidAddressError, "No #{native[:name]} balance, token holdings, or transactions found for this address."
       end
 
       {
         balance_wei: balance_wei,
-        eth_quantity: balance_wei / WEI_PER_ETH,
-        eth_current_balance: estimate_current_balance("ETH", balance_wei / WEI_PER_ETH),
+        native_quantity: balance_wei / WEI_PER_ETH,
+        native_current_balance: estimate_current_balance(native[:symbol], balance_wei / WEI_PER_ETH),
         normal_transactions: normal_transactions,
         token_transfers: token_transfers,
         token_holdings: token_holdings
@@ -243,7 +280,7 @@ class OnchainWalletItem::Importer
         data = grouped[contract]
         decimals = transfer["tokenDecimal"].to_i
         decimals = 18 if decimals.zero?
-        data[:symbol] = transfer["tokenSymbol"].to_s.upcase.presence || contract.first(8).upcase
+        data[:symbol] = canonical_symbol(transfer["tokenSymbol"].to_s.upcase.presence || contract.first(8).upcase)
         data[:name] = transfer["tokenName"].presence || data[:symbol]
         data[:decimals] = decimals
         data[:transfers] << transfer.merge("onchain_amount" => token_transfer_amount(transfer, address_down).to_s)
@@ -263,9 +300,9 @@ class OnchainWalletItem::Importer
       end
     end
 
-    def existing_ethereum_token_contracts(address)
+    def existing_evm_token_contracts(chain, address)
       onchain_wallet_item.onchain_wallet_accounts
-        .where(chain: "ethereum", wallet_address: address.to_s.downcase, asset_kind: "erc20")
+        .where(chain: chain, wallet_address: address.to_s.downcase, asset_kind: "erc20")
         .pluck(:token_contract)
     end
 
@@ -290,6 +327,11 @@ class OnchainWalletItem::Importer
     def token_transfer_raw_delta(transfer, address_down)
       value = transfer["value"].to_d
       transfer["from"].to_s.downcase == address_down ? -value : value
+    end
+
+    def canonical_symbol(symbol)
+      up = symbol.to_s.upcase
+      STABLECOIN_ALIASES.fetch(up, up)
     end
 
     def institution_metadata(attrs)
