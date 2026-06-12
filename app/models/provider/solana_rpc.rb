@@ -91,13 +91,19 @@ class Provider::SolanaRpc
       raise InvalidAddressError, "Invalid Solana address" unless valid_address?(address)
     end
 
+    # Memoized per address: both get_token_balances and get_transactions need
+    # this, so caching avoids duplicate getTokenAccountsByOwner RPC calls in a
+    # single sync (which matters on rate-limited public RPCs).
     def token_accounts(address)
-      [ TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID ].flat_map do |program_id|
-        result = rpc("getTokenAccountsByOwner", [ address, { programId: program_id }, { encoding: "jsonParsed" } ])
-        result.is_a?(Hash) ? Array(result["value"]) : []
+      @token_accounts ||= {}
+      @token_accounts[address] ||= begin
+        [ TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID ].flat_map do |program_id|
+          result = rpc("getTokenAccountsByOwner", [ address, { programId: program_id }, { encoding: "jsonParsed" } ])
+          result.is_a?(Hash) ? Array(result["value"]) : []
+        end
+      rescue Error
+        []
       end
-    rescue Error
-      []
     end
 
     def token_account_pubkeys(address)
