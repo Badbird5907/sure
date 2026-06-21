@@ -69,4 +69,20 @@ class OnchainWalletAccount::ProcessorTest < ActiveSupport::TestCase
     assert_equal BigDecimal("35000"), @account.reload.balance
     assert_equal 0, @account.cash_balance
   end
+
+  test "rolls back account balance fields when current anchor update fails" do
+    OnchainWalletAccount::SecurityResolver.stubs(:resolve).returns(nil)
+    @account.update!(cash_balance: 123, currency: "EUR")
+    Account::CurrentBalanceManager.any_instance
+      .stubs(:set_current_balance)
+      .returns(Account::CurrentBalanceManager::Result.new(success?: false, changes_made?: false, error: "anchor failed"))
+
+    assert_raises(RuntimeError, "anchor failed") do
+      OnchainWalletAccount::Processor.new(@wallet_account).process
+    end
+
+    @account.reload
+    assert_equal BigDecimal("123"), @account.cash_balance
+    assert_equal "EUR", @account.currency
+  end
 end
