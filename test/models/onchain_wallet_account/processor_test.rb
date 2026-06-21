@@ -55,4 +55,18 @@ class OnchainWalletAccount::ProcessorTest < ActiveSupport::TestCase
     assert stubs.all?(&:excluded?)
     assert stubs.all? { |e| e.amount.zero? }
   end
+
+  test "records current anchor valuation for balance materialization" do
+    OnchainWalletAccount::SecurityResolver.stubs(:resolve).returns(nil)
+    @wallet_account.update!(current_balance: 35_000)
+
+    OnchainWalletAccount::Processor.new(@wallet_account).process
+
+    current_anchor = @account.valuations.current_anchor.includes(:entry).first
+    assert_not_nil current_anchor
+    assert_equal Date.current, current_anchor.entry.date
+    assert_equal BigDecimal("35000"), current_anchor.entry.amount
+    assert_equal BigDecimal("35000"), @account.reload.balance
+    assert_equal 0, @account.cash_balance
+  end
 end
